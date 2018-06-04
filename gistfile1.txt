@@ -1,0 +1,274 @@
+// Librerias I2C para controlar el mpu6050
+// la libreria MPU6050.h necesita I2Cdev.h, I2Cdev.h necesita Wire.h
+#include "I2Cdev.h"
+#include "MPU6050.h"
+#include "Wire.h"
+
+// La dirección del MPU6050 puede ser 0x68 o 0x69, dependiendo 
+// del estado de AD0. Si no se especifica, 0x68 estará implicito
+const int mpuAddress = 0x68;  // Puede ser 0x68 o 0x69
+MPU6050 mpu(mpuAddress);
+
+// Valores RAW (sin procesar) del acelerometro y giroscopio en los ejes x,y,z
+int ax, ay, az;
+
+// DECLARACION DE VARIABLES PARA PINES
+const int pinecho = 12;
+const int pintrigger = 13;
+const int pinled = 6;
+const int pinBuzzer = 5;
+// VARIABLES PARA CALCULOS
+unsigned int tiempo, distancia;
+
+int boton;
+int botonCal;
+bool calibrado = false;
+  long valorEnMillis1 = millis();
+long tiempo_prev;
+float dt;
+float ang_x, ang_y;
+float ang_x_prev, ang_y_prev;
+
+//Variables usadas por el filtro pasa bajos
+long f_ax,f_ay, f_az;
+int p_ax, p_ay, p_az;
+long f_gx,f_gy, f_gz;
+int p_gx, p_gy, p_gz;
+int counter=0;
+
+//Valor de los offsets
+int ax_o,ay_o,az_o;
+int gx_o,gy_o,gz_o;
+
+void setup() {
+
+ // CONFIGURAR PINES DE ENTRADA Y SALIDA
+ pinMode(pinecho, INPUT);
+ pinMode(pintrigger, OUTPUT);
+ pinMode(pinled, OUTPUT);
+ pinMode(pinBuzzer, OUTPUT);
+  
+ for (int x=2; x<5; x++){
+  pinMode (x, OUTPUT);
+ }
+ pinMode (7, INPUT);
+ pinMode (8, OUTPUT);
+ pinMode (9, INPUT);
+ pinMode (10, OUTPUT);
+ pinMode (11, OUTPUT);
+ 
+   Serial.begin(115200);
+   Wire.begin();
+   mpu.initialize();
+   Serial.println(mpu.testConnection() ? F("IMU iniciado correctamente") : F("Error al iniciar IMU"));
+
+  ax_o=mpu.getXAccelOffset();
+  ay_o=mpu.getYAccelOffset();
+  az_o=mpu.getZAccelOffset();
+  gx_o=mpu.getXGyroOffset();
+  gy_o=mpu.getYGyroOffset();
+  gz_o=mpu.getZGyroOffset();
+  
+  Serial.println("Offsets:");
+  Serial.print(ax_o); Serial.print("\t"); 
+  Serial.print(ay_o); Serial.print("\t"); 
+  Serial.print(az_o); Serial.print("\t"); 
+  Serial.println("Valores sin calibrar");  
+  // Espera un caracter para empezar a calibrar
+
+  botonCal = digitalRead (7);
+  while (botonCal == LOW){ botonCal = digitalRead (7);}  // Esperamos a que se presione el botón, para comenzar a calibrar.
+  Serial.println("Calibrando, no mover IMU");  
+  delay(1000);
+
+  ax_o=mpu.getXAccelOffset();
+  ay_o=mpu.getYAccelOffset();
+  az_o=mpu.getZAccelOffset();
+  gx_o=mpu.getXGyroOffset();
+  gy_o=mpu.getYGyroOffset();
+  gz_o=mpu.getZGyroOffset();
+
+  calibrar();
+
+}
+
+void calibrar(){
+  while (calibrado==false){
+    // Leer las aceleraciones y velocidades angulares
+  mpu.getAcceleration(&ax, &ay, &az);
+
+digitalWrite (10, LOW);
+digitalWrite (6, LOW);
+digitalWrite (2, LOW);
+digitalWrite (5, LOW);
+digitalWrite (3, LOW);
+digitalWrite (4, LOW);
+
+
+  // Filtrar las lecturas
+  f_ax = f_ax-(f_ax>>5)+ax;
+  p_ax = f_ax>>5;
+
+  f_ay = f_ay-(f_ay>>5)+ay;
+  p_ay = f_ay>>5;
+
+  f_az = f_az-(f_az>>5)+az;
+  p_az = f_az>>5;
+
+  //Cada 100 lecturas corregir el offset
+  if (counter==100){
+    //Mostrar las lecturas separadas por un [tab]
+    Serial.print("promedio:"); Serial.print("t");
+    Serial.print(p_ax); Serial.print("\t");
+    Serial.print(p_ay); Serial.print("\t");
+    Serial.println(p_az);
+
+    //Calibrar el acelerometro a 1g en el eje z (ajustar el offset)
+    if (p_ax>0) ax_o--;
+    else {ax_o++;}
+    if (p_ay>0) ay_o--;
+    else {ay_o++;}
+    if (p_az-16384>0) az_o--;
+    else {az_o++;}
+    
+    mpu.setXAccelOffset(ax_o);
+    mpu.setYAccelOffset(ay_o);
+    mpu.setZAccelOffset(az_o);  
+
+    counter=0;
+  }
+  counter++;
+
+  if (botonCal == HIGH){ // Permanecer calibrando mientras el botón esté apretado y no esté calibrado.
+  digitalWrite (8, HIGH);
+  if (ax < 100 && ax > -100){
+    if (ay < 100 && ay > -100){
+      if (az < 16500 && az > 16300){
+         digitalWrite (8, LOW);
+         calibrado=true;
+      }
+    }
+  }
+}
+  }
+  }
+
+
+void parpadeo(int tiempoParpadeo, int tiempoParpadeoOn, int pin, int frecuencia){  //Las variables serán el tiempo apagado en el parpadeo, el tiempo encendido, y el pin en el que actua.
+    if (millis() - valorEnMillis1 > tiempoParpadeo){
+      tone(pin, frecuencia);
+    }
+    if (millis() - valorEnMillis1 > tiempoParpadeo + tiempoParpadeoOn){
+      noTone(pin);
+      valorEnMillis1 = millis();
+    }
+}
+
+
+void loop() {
+
+   // Leer las aceleraciones 
+   mpu.getAcceleration(&ax, &ay, &az);
+  
+   //Calcular los angulos de inclinacion
+   float accel_ang_x = atan(ax / sqrt(pow(ay, 2) + pow(az, 2)))*(180.0 / 3.14);
+   float accel_ang_y = atan(ay / sqrt(pow(ax, 2) + pow(az, 2)))*(180.0 / 3.14);
+ 
+   // Mostrar resultados
+   Serial.print(F("Inclinacion en X: "));
+   Serial.print(accel_ang_x);
+   Serial.print(F("\tInclinacion en Y:"));
+   Serial.println(accel_ang_y);
+
+botonCal = digitalRead (7);
+
+if (botonCal == HIGH){ // Calibración.
+  calibrado=false;
+  calibrar();
+  
+}
+
+boton = digitalRead (9);
+
+
+
+if (boton == HIGH){
+
+ digitalWrite (11, HIGH);
+ 
+ if (accel_ang_y <= -10){
+  digitalWrite (3, HIGH);
+ }else {
+  digitalWrite (3, LOW);
+ }
+ 
+ if (accel_ang_y >= 10){
+  digitalWrite (5, HIGH);
+ }else {
+  digitalWrite (5, LOW);
+ }
+ 
+ if (accel_ang_x <= -10){
+  digitalWrite (4, HIGH);
+ }else {
+  digitalWrite (4, LOW);
+ }
+ 
+ if (accel_ang_x >= 10){
+  digitalWrite (2, HIGH);
+ }else {
+  digitalWrite (2, LOW);
+ }
+
+  if (accel_ang_y >= 10){ // Iniciar secuencia de parpadeo con la marcha atrás.
+    parpadeo(300, 300, 10, 1000);
+  }else {
+  noTone(10);
+  }
+
+ if (distancia <= 200 && distancia > 100) {
+ digitalWrite(6, HIGH);
+ delay(100);
+ digitalWrite(6, LOW);
+ delay(100);
+ } else {
+ digitalWrite(6, LOW);
+ }
+ if (distancia <= 100 && distancia > 30) {
+ digitalWrite(6, HIGH);
+ delay(50);
+ digitalWrite(6, LOW);
+ delay(50);
+ } else {
+ digitalWrite(6, LOW);
+ }
+ if (distancia <= 30) {
+ digitalWrite(6, HIGH);
+ } else {
+ digitalWrite(6, LOW);
+ }
+
+}
+else {
+  digitalWrite(6, LOW);
+ for(int x=0; x<6; x++){
+  digitalWrite (x, LOW);
+  digitalWrite (11, LOW); 
+ }
+}
+
+ digitalWrite(pintrigger, LOW);
+ delayMicroseconds(2);
+ digitalWrite(pintrigger, HIGH);
+ // EL PULSO DURA AL MENOS 10 uS EN ESTADO ALTO
+ delayMicroseconds(10);
+ digitalWrite(pintrigger, LOW);
+// MEDIR EL TIEMPO EN ESTADO ALTO DEL PIN "ECHO" EL PULSO ES PROPORCIONAL A LA DISTANCIA MEDIDA
+ tiempo = pulseIn(pinecho, HIGH);
+ // LA VELOCIDAD DEL SONIDO ES DE 340 M/S O 29 MICROSEGUNDOS POR CENTIMETRO
+ // DIVIDIMOS EL TIEMPO DEL PULSO ENTRE 58, TIEMPO QUE TARDA RECORRER IDA Y VUELTA UN CENTIMETRO LA ONDA SONORA
+ distancia = tiempo / 58;
+ // ENVIAR EL RESULTADO AL MONITOR SERIAL
+ Serial.print(distancia);
+ Serial.println(" cm");
+}
